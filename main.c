@@ -6,7 +6,8 @@
 
 // assert(8 == sizeof(void *))
 typedef volatile long long cell;
-typedef volatile void *ptr;
+typedef volatile char *ptr;
+typedef void (*fptr)(void);
 
 /* stack definition */
 #define DSTACK_SIZE 4096
@@ -30,7 +31,8 @@ typedef struct dict_entry {
   char flen;
   char name[15];
   struct dict_entry *link;
-  void (*xt)(void);
+  fptr xt;
+  fptr param[];
 } dict_entry;
 
 #define DICT_SIZE 4096
@@ -47,8 +49,6 @@ struct tag {
 dict_entry *find(struct tag tag)
 {
   dict_entry *curr = (dict_entry *)link;
-  char *p = (char *)&tag.name;
-  for ( ; *p; ++p) *p = tolower(*p);
   while (NULL != curr) {
     if (tag.len == (curr->flen & 0xF) &&
 	0 == memcmp(&tag.name, &curr->name, tag.len)) {
@@ -70,33 +70,49 @@ struct tag strtotag(char str[]) {
    a pointer to a function pointer, because dereference a function pointer
    give the "funcion" (i.e. it does nothing), ip is better be a pointer to a 
    pointer to a function pointer */
-void (***volatile ip)(void);
+fptr ** ip;
 /* w is the pointer to the current xt that is actually being executed */
-void (***volatile w)(void);
+fptr ** w;
 
-#if 0
-/* #define GOTO(addr) goto *(addr) */
+cell in;
+#define TIB_SIZE 4096
+cell tib[TIB_SIZE];
+
+#if __GNUC__
 #define GOTO(addr) asm volatile("jmp *%0" : : "r" (addr));
-#else // __GNUC__
+#else
 void go(void *addr) {
-  (&addr)[2] = addr;
+  (&addr)[2] = addr + 8;
 }
-#define GOTO(addr) go(addr)
-#endif // __GNUC__
+#define GOTO(addr) go((char *)addr);
+#endif
 
-#define MSG puts(__FUNCTION__);
-
-#define NEXT w = (void *)*ip++; asm volatile("leave"); GOTO(*w);
-void fth_docol(void) { MSG; PUSH(rsp, (cell)ip); ip = w+1; NEXT }
-void fth_exit(void)  { MSG; ip = (void *)POP(rsp); NEXT }
-void fth_tor(void)   { MSG; PUSH(rsp, POP(dsp)); NEXT }
-void fth_rto(void)   { MSG; PUSH(dsp, POP(rsp)); NEXT }
-void fth_dup(void)   { MSG; dsp[0] = dsp[1]; dsp--; NEXT }
-void fth_swap(void)  { MSG;
+#define NEXT asm volatile("leave"); w = **(void ***)&ip; ip++; GOTO(*w)
+void fth_docon(void) { PUSH(dsp, *((*(cell **)w)+1)); NEXT }
+void fth_docol(void) { PUSH(rsp, (cell)ip); ip = w+1; NEXT }
+void fth_exit(void)  { ip = (void *)POP(rsp); NEXT }
+void fth_push(void)  { w = (void *)*ip++; PUSH(dsp, (cell)w); NEXT }
+void fth_fetch(void) { dsp[1] = *(cell *)dsp[1]; NEXT }
+void fth_store(void) { *(cell *)dsp[1] = dsp[2]; dsp += 2; NEXT }
+void fth_create(void) {
+  while (isspace(tib[in])) { in++; }
+  int end = in;
+  while (isgraph(tib[end])) { end++; }
+  NEXT;
+}
+void fth_rightbracket(void) {
+  while (1) {
+  }
+}
+void fth_tor(void)   { PUSH(rsp, POP(dsp)); NEXT }
+void fth_rfrom(void) { PUSH(dsp, POP(rsp)); NEXT }
+void fth_dup(void)   { dsp[0] = dsp[1]; dsp--; NEXT }
+void fth_swap(void)  {
   cell tmp = dsp[1]; dsp[1] = dsp[2]; dsp[2] = tmp;
+  /* dsp[1] ^= dsp[2]; dsp[2] ^= dsp[1]; dsp[1] ^= dsp[2]; */
 NEXT; }
-void fth_execute(void) { MSG; w = *(void **)&POP(dsp); asm volatile("leave"); GOTO(*w); }
-void fth_find(void)  { MSG;
+void fth_execute(void) { w = *(void **)&POP(dsp); asm volatile("leave"); GOTO(*w) }
+void fth_find(void)  {
   dict_entry *result = find(*(struct tag *)(dsp + 1));
   if (NULL == result) {
     PUSH(dsp, 0); NEXT;
@@ -106,17 +122,28 @@ void fth_find(void)  { MSG;
   NEXT;
 }
 
-#define C(name) (assert(find(strtotag(#name))), &find(strtotag(#name))->xt),
+struct {
+  void (*push)(void);
+} kernel_words =
+  {
+    fth_push,
+  };
+
+#define K(name) ((fptr *)&kernel_words.name),
+#define C(name) (&find(strtotag(#name))->xt),
 #define LIST_OF_WORD							\
-    X(exit, 0, fth_exit, { })						\
-    X(>r, 0, fth_tor, { })						\
-    X(r>, 0, fth_rto, { })						\
-    X(dup, 0, fth_dup, { })						\
-    X(swap, 0, fth_swap, { })						\
-    X(execute, 0, fth_execute, { })					\
-    X(over, 0, fth_docol, { C(>r) C(dup) C(r>) C(swap) C(exit) })	\
-    X(dup2, 0, fth_docol, { C(over) C(over) C(exit) })
-    
+  X(exit, 0, fth_exit, )						\
+    X(@, 0, fth_fetch, )						\
+    X(!, 0, fth_store, )						\
+    X(>in, 0, fth_docon, (void *)&in)					\
+    X(>r, 0, fth_tor, )							\
+    X(r>, 0, fth_rfrom, )						\
+    X(dup, 0, fth_dup, )						\
+    X(swap, 0, fth_swap, )						\
+    X(execute, 0, fth_execute, )					\
+    X(over, 0, fth_docol, C(>r) C(dup) C(r>) C(swap) C(exit) )		\
+    X(dup2, 0, fth_docol, C(over) C(over) C(exit))
+
 #define X(NAME, FLAG, CP, PARAM)			\
   do {							\
     entry = (dict_entry){				\
@@ -126,10 +153,10 @@ void fth_find(void)  { MSG;
       CP						\
     };							\
     memcpy((void *)cp, &entry, sizeof(dict_entry));	\
-    link = cp;						\
+    link = (dict_entry *)cp;				\
     cp += sizeof(dict_entry);				\
-    void (**params[])(void) = PARAM;			\
-    memcpy((void *)cp, params, sizeof(params));		\
+    void *params[] = { 0, PARAM };			\
+    memcpy((void *)cp, params+1, sizeof(params) - sizeof(*params));	\
     cp += sizeof(params);				\
   } while (0);
   
@@ -139,7 +166,6 @@ void build_core_code(void) {
 }
 #undef X
 #undef LIST_OF_CODE
-#undef C
 
 void dict_dump(void)
 {
@@ -151,20 +177,12 @@ void dict_dump(void)
   fclose(fp);
 }
 
-void (*done_ptr)(void) = NULL;
-void (**(*bootstrap)[])(void) = NULL;
+fptr **bootstrap = NULL;
 
+/* avoid touching anything in the ctx function! the code rely on the size of code to work! */
 void ctx(void)
 {
-  done_ptr = &&done;
-  ip = (void (***)(void))*bootstrap;
-  w = (void *)*ip++;
   GOTO(*w);
- done:
-  /* NOTE if there's no code here, the label will be after cleanup and ret.
-     stuff like return; or (void *)0; doesn't help here
-  */
-  asm volatile("nop");
 }
 
 int main()
@@ -178,24 +196,33 @@ int main()
   stack_print(dsp);
   stack_print(rsp);
 
-  dict_entry *target;
-  if (NULL == (target = find(strtotag("dup2")))) {
-    puts("test target not found\n");
+  dict_entry *dup2;
+  if (NULL == (dup2 = find(strtotag("dup2")))) {
+    puts("dup2 not found\n");
     return 1;
   }
 
-  PUSH(dsp, (long long)&target->xt);
+  PUSH(dsp, (long long)&dup2->xt);
 
-  if (NULL == (target = find(strtotag("execute")))) {
-    puts("execute target not found\n");
+  dict_entry *execute;
+  if (NULL == (execute = find(strtotag("execute")))) {
+    puts("execute not found\n");
     return 1;
   }
 
-  void (**bt[])(void) = {
-    &target->xt,
+  fptr done_ptr = NULL;
+  fptr *bt[] = {
+    C(execute)
+    K(push)
+    C(dup2)
+    C(execute)
     &done_ptr
   };
-  bootstrap = &bt;
+  fptr ctxptr = &ctx;
+  done_ptr = (fptr)(*(long long *)&ctxptr + 21);
+  
+  ip = (fptr **)&bt;
+  w = (fptr **)*ip++;
   
   ctx();
 
