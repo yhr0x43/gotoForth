@@ -91,8 +91,13 @@ cell in;
 cell tib[TIB_SIZE];
 
 void go(void *addr) {
-    long long ptr = (long long)&addr;
-    ((void * volatile *)ptr)[1] = addr;
+  long long ptr = (long long)&addr;
+  // TODO adaptive return address offset
+#if 0
+  ((void * volatile *)ptr)[1] = addr;
+#else
+  ((void * volatile *)ptr)[4] = addr;
+#endif
 }
 #define GOTO(addr) go(addr);
 
@@ -130,7 +135,7 @@ void fth_dodoes(void) {
   PUSH(rsp, (cell)ip);
   PUSH(dsp, (cell)w+2);
   ip = (fptr **)*(w+1);
-  NEXT
+  NEXT;
 }
 [[gnu::naked]]
 void fth_does(void) {
@@ -138,7 +143,7 @@ void fth_does(void) {
   link->param[0] = (ptr)(w+1);
   cp += sizeof(link->param[0]);
   ip = (fptr **)POP(rsp);
-  NEXT
+  NEXT;
 }
 void fth_rightbracket(void) {
   while (1) {
@@ -176,19 +181,19 @@ struct {
 
 #define K(name) ((fptr *)&kernel_words.name),
 #define C(name) (&find(strtotag(#name))->xt),
-#define LIST_OF_WORD							\
-  X(exit, 0, fth_exit, )						\
-    X(@, 0, fth_fetch, )						\
-    X(!, 0, fth_store, )						\
-    X(>in, 0, fth_docon, (void *)&in)					\
-    X(does>, 0, fth_does, )						\
-    X(>r, 0, fth_tor, )							\
-    X(r>, 0, fth_rfrom, )						\
-    X(dup, 0, fth_dup, )						\
-    X(swap, 0, fth_swap, )						\
-    X(execute, 0, fth_execute, )					\
-    X(over, 0, fth_docol, C(>r) C(dup) C(r>) C(swap) C(exit) )		\
-    X(dup2, 0, fth_docol, C(over) C(over) C(exit))
+#define LIST_OF_WORD						\
+  X(EXIT, 0, fth_exit, )					\
+    X(@, 0, fth_fetch, )					\
+    X(!, 0, fth_store, )					\
+    X(>IN, 0, fth_docon, (void *)&in)				\
+    X(DOES>, 0, fth_does, )					\
+    X(>R, 0, fth_tor, )						\
+    X(R>, 0, fth_rfrom, )					\
+    X(DUP, 0, fth_dup, )					\
+    X(SWAP, 0, fth_swap, )					\
+    X(EXECUTE, 0, fth_execute, )				\
+    X(OVER, 0, fth_docol, C(>R) C(DUP) C(R>) C(SWAP) C(EXIT) )	\
+    X(DUP2, 0, fth_docol, C(OVER) C(OVER) C(EXIT))
 
 #define X(NAME, FLAG, CP, PARAM)					\
   do {									\
@@ -247,30 +252,35 @@ int main()
   stacks_print();
 
   dict_entry *dup2;
-  if (NULL == (dup2 = find(strtotag("dup2")))) {
-    puts("dup2 not found\n");
+  if (NULL == (dup2 = find(strtotag("DUP2")))) {
+    puts("DUP2 not found\n");
     return 1;
   }
 
   PUSH(dsp, (long long)&dup2->xt);
 
   dict_entry *execute;
-  if (NULL == (execute = find(strtotag("execute")))) {
-    puts("execute not found\n");
+  if (NULL == (execute = find(strtotag("EXECUTE")))) {
+    puts("EXECUTE not found\n");
     return 1;
   }
 
   fptr done_ptr = NULL;
   fptr *bt[] = {
-    C(execute)
+    C(EXECUTE)
     K(push)
-    C(dup2)
-    C(execute)
+    C(DUP2)
+    C(EXECUTE)
     &done_ptr
   };
   void (*ctxptr)(void) = &ctx;
   void (**p)(void) = &ctxptr;
+  // TODO adaptive context return offset
+#if 0
   done_ptr = (fptr)((*(long long*)p) + 34);
+#else
+  done_ptr = (fptr)((*(long long*)p) + 40);
+#endif
   
   ip = (fptr **)&bt;
   w = (fptr **)*ip++;
