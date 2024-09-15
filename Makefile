@@ -1,11 +1,11 @@
 CC ?= gcc
-CFLAGS ?= -Wall -Wextra -Wpedantic -pedantic -ggdb
+CFLAGS ?= -std=c2x -Wall -Wextra -pedantic -ggdb
 
 .PHONY: all
 
-all: forth
+all: gotoforth
 
-forth: main.c Makefile
+gotoforth: main.c Makefile
 	$(CC) $(CFLAGS) -o $@ $<
 
 forth.s: main.c Makefile

@@ -5,25 +5,37 @@
 #include <string.h>
 
 // assert(sizeof(cell) == sizeof(ptr) == sizeof(fptr))
-typedef long long cell;
-typedef char *ptr;
+typedef volatile long long cell;
+typedef volatile char * volatile ptr;
 typedef void (*fptr)(void);
 
 /* stack definition */
 #define DSTACK_SIZE 4096
 #define RSTACK_SIZE 4096
 cell dstack[DSTACK_SIZE], rstack[RSTACK_SIZE];
-cell *dsp = dstack + DSTACK_SIZE - 1, *rsp = rstack + RSTACK_SIZE - 1;
+cell * const DSTACK_TOP = dstack + DSTACK_SIZE - 1;
+cell * const RSTACK_TOP = rstack + RSTACK_SIZE - 1;
+int stack_empty(cell *sp) {
+  return sp == DSTACK_TOP || sp == RSTACK_TOP;
+}
+cell * volatile dsp = DSTACK_TOP, * volatile rsp = RSTACK_TOP;
 
 #define PUSH(s, x) (*(s)-- = (x))
-#define POP(s) (*++(s))
+#define POP(s) (stack_empty(s) ? (assert(0 && "stack underflow"), 0) : *++(s))
 
 void stack_print(cell *sp)
 {
-  while (sp != dstack + DSTACK_SIZE - 1 && sp != rstack + RSTACK_SIZE - 1) {
+  while (!stack_empty(sp)) {
     printf("%llx, ", (long long)*++sp);
   }
   puts("");
+}
+
+void stacks_print(void) {
+  printf("DSP> ");
+  stack_print(dsp);
+  printf("RSP> ");
+  stack_print(rsp);
 }
 
 /* dict definition */
@@ -78,22 +90,27 @@ cell in;
 #define TIB_SIZE 4096
 cell tib[TIB_SIZE];
 
-#if __GNUC__
-#define GOTO(addr) asm volatile("jmp *%0" : : "r" (addr));
-#else
 void go(void *addr) {
-  (&addr)[2] = addr;
+    long long ptr = (long long)&addr;
+    ((void * volatile *)ptr)[1] = addr;
 }
-#define GOTO(addr) go((char *)addr);
-#endif
+#define GOTO(addr) go(addr);
 
-#define NEXT asm volatile("leave"); w = (fptr **)*ip; ip++; GOTO(*w)
+#define NEXT w = (fptr **)*ip; ip++; GOTO(*w)
+#define MSG(msg) puts((msg));
+[[gnu::naked]]
 void fth_docon(void) { PUSH(dsp, *((*(cell **)w)+1)); NEXT }
+[[gnu::naked]]
 void fth_docol(void) { PUSH(rsp, (cell)ip); ip = w+1; NEXT }
+[[gnu::naked]]
 void fth_exit(void)  { ip = (fptr **)POP(rsp); NEXT }
+[[gnu::naked]]
 void fth_push(void)  { w = (void *)*ip++; PUSH(dsp, (cell)w); NEXT }
+[[gnu::naked]]
 void fth_fetch(void) { dsp[1] = *(cell *)dsp[1]; NEXT }
+[[gnu::naked]]
 void fth_store(void) { *(cell *)dsp[1] = dsp[2]; dsp += 2; NEXT }
+[[gnu::naked]]
 void fth_create(void) {
   while (isspace(tib[in])) { in++; }
   int end = in;
@@ -101,19 +118,21 @@ void fth_create(void) {
   if (end - in > 31) { /* TODO Abort */ }
   dict_entry *d = (dict_entry *)cp;
   d->flen = end - in;
-  memcpy(d->name, tib + in, end - in);
+  memcpy(d->name, (const void *)(tib + in), end - in);
   d->link = link;
   link = d;
   cp += sizeof(dict_entry);
   NEXT;
 }
 /* This dodoes implementation */
+[[gnu::naked]]
 void fth_dodoes(void) {
   PUSH(rsp, (cell)ip);
   PUSH(dsp, (cell)w+2);
   ip = (fptr **)*(w+1);
   NEXT
 }
+[[gnu::naked]]
 void fth_does(void) {
   link->xt = fth_dodoes;
   link->param[0] = (ptr)(w+1);
@@ -125,13 +144,19 @@ void fth_rightbracket(void) {
   while (1) {
   }
 }
+[[gnu::naked]]
 void fth_tor(void)   { PUSH(rsp, POP(dsp)); NEXT }
+[[gnu::naked]]
 void fth_rfrom(void) { PUSH(dsp, POP(rsp)); NEXT }
+[[gnu::naked]]
 void fth_dup(void)   { dsp[0] = dsp[1]; dsp--; NEXT }
+[[gnu::naked]]
 void fth_swap(void)  {
   cell tmp = dsp[1]; dsp[1] = dsp[2]; dsp[2] = tmp;
 NEXT; }
-void fth_execute(void) { w = *(void **)&POP(dsp); asm volatile("leave"); GOTO(*w) }
+[[gnu::naked]]
+void fth_execute(void) { w = (void (***)(void))POP(dsp); GOTO(*w) }
+[[gnu::naked]]
 void fth_find(void)  {
   dict_entry *result = find(*(struct tag *)(dsp + 1));
   if (NULL == result) {
@@ -143,7 +168,7 @@ void fth_find(void)  {
 }
 
 struct {
-  void (*push)(void);
+  fptr push;
 } kernel_words =
   {
     fth_push,
@@ -180,7 +205,7 @@ struct {
     params[0] = (fptr *)cp + 1;						\
     memcpy((void *)cp, params + 1, sizeof(params) - sizeof(*params));	\
     cp += sizeof(params) - sizeof(*params);				\
-    } while (0);
+  } while (0);
   
 void build_core_code(void) {
   dict_entry entry;
@@ -202,10 +227,13 @@ void dict_dump(void)
 
 fptr **bootstrap = NULL;
 
-/* avoid touching anything in the ctx function! the code rely on the size of code to work! */
+/* avoid touching anything in the ctx function! */
 void ctx(void)
 {
+  volatile int x = 0;
+  (void)x;
   GOTO(*w);
+  x = 0;
 }
 
 int main()
@@ -216,8 +244,7 @@ int main()
   PUSH(dsp, 6);
   PUSH(dsp, 2);
 
-  stack_print(dsp);
-  stack_print(rsp);  
+  stacks_print();
 
   dict_entry *dup2;
   if (NULL == (dup2 = find(strtotag("dup2")))) {
@@ -241,16 +268,16 @@ int main()
     C(execute)
     &done_ptr
   };
-  fptr ctxptr = &ctx;
-  done_ptr = (fptr)(*(long long *)&ctxptr + 21);
+  void (*ctxptr)(void) = &ctx;
+  void (**p)(void) = &ctxptr;
+  done_ptr = (fptr)((*(long long*)p) + 34);
   
   ip = (fptr **)&bt;
   w = (fptr **)*ip++;
   
   ctx();
 
-  stack_print(dsp);
-  stack_print(rsp);
+  stacks_print();
 
   return 0;
 }
