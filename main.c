@@ -1,13 +1,14 @@
 #include <assert.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
-// assert(sizeof(cell) == sizeof(ptr) == sizeof(fptr))
-typedef volatile long long cell;
+/* assert(sizeof(cell) == sizeof(ptr) == sizeof(fptr)) */
+typedef volatile uint64_t cell;
 typedef volatile char * volatile ptr;
-typedef void (*fptr)(void);
+typedef void *(*(*fptr)(void))(void);
 
 /* stack definition */
 #define DSTACK_SIZE 4096
@@ -90,33 +91,15 @@ cell in;
 #define TIB_SIZE 4096
 cell tib[TIB_SIZE];
 
-void go(void *addr) {
-  long long ptr = (long long)&addr;
-  // TODO adaptive return address offset
-#if 0
-  ((void * volatile *)ptr)[1] = addr;
-#else
-  ((void * volatile *)ptr)[4] = addr;
-#endif
-}
-#define GOTO(addr) go(addr);
-
-#define NEXT w = (fptr **)*ip; ip++; GOTO(*w)
+#define NEXT w = (fptr **)*ip; ip++; return *w;
 #define MSG(msg) puts((msg));
-[[gnu::naked]]
-void fth_docon(void) { PUSH(dsp, *((*(cell **)w)+1)); NEXT }
-[[gnu::naked]]
-void fth_docol(void) { PUSH(rsp, (cell)ip); ip = w+1; NEXT }
-[[gnu::naked]]
-void fth_exit(void)  { ip = (fptr **)POP(rsp); NEXT }
-[[gnu::naked]]
-void fth_push(void)  { w = (void *)*ip++; PUSH(dsp, (cell)w); NEXT }
-[[gnu::naked]]
-void fth_fetch(void) { dsp[1] = *(cell *)dsp[1]; NEXT }
-[[gnu::naked]]
-void fth_store(void) { *(cell *)dsp[1] = dsp[2]; dsp += 2; NEXT }
-[[gnu::naked]]
-void fth_create(void) {
+fptr *fth_docon(void) { PUSH(dsp, *((*(cell **)w)+1)); NEXT }
+fptr *fth_docol(void) { PUSH(rsp, (cell)ip); ip = w+1; NEXT }
+fptr *fth_exit(void)  { ip = (fptr **)POP(rsp); NEXT }
+fptr *fth_push(void)  { w = (void *)*ip++; PUSH(dsp, (cell)w); NEXT }
+fptr *fth_fetch(void) { dsp[1] = *(cell *)dsp[1]; NEXT }
+fptr *fth_store(void) { *(cell *)dsp[1] = dsp[2]; dsp += 2; NEXT }
+fptr *fth_create(void) {
   while (isspace(tib[in])) { in++; }
   int end = in;
   while (isgraph(tib[end]) || (0x80 & tib[end])) { end++; }
@@ -130,39 +113,33 @@ void fth_create(void) {
   NEXT;
 }
 /* This dodoes implementation */
-[[gnu::naked]]
-void fth_dodoes(void) {
+fptr *fth_dodoes(void) {
   PUSH(rsp, (cell)ip);
   PUSH(dsp, (cell)w+2);
   ip = (fptr **)*(w+1);
   NEXT;
 }
-[[gnu::naked]]
-void fth_does(void) {
-  link->xt = fth_dodoes;
+fptr *fth_does(void) {
+  link->xt = (fptr)fth_dodoes;
   link->param[0] = (ptr)(w+1);
   cp += sizeof(link->param[0]);
   ip = (fptr **)POP(rsp);
   NEXT;
 }
-void fth_rightbracket(void) {
+fptr *fth_rightbracket(void) {
   while (1) {
   }
 }
-[[gnu::naked]]
-void fth_tor(void)   { PUSH(rsp, POP(dsp)); NEXT }
-[[gnu::naked]]
-void fth_rfrom(void) { PUSH(dsp, POP(rsp)); NEXT }
-[[gnu::naked]]
-void fth_dup(void)   { dsp[0] = dsp[1]; dsp--; NEXT }
-[[gnu::naked]]
-void fth_swap(void)  {
+fptr *fth_tor(void)   { PUSH(rsp, POP(dsp)); NEXT }
+fptr *fth_rfrom(void) { PUSH(dsp, POP(rsp)); NEXT }
+fptr *fth_dup(void)   { dsp[0] = dsp[1]; dsp--; NEXT }
+fptr *fth_swap(void)  {
   cell tmp = dsp[1]; dsp[1] = dsp[2]; dsp[2] = tmp;
 NEXT; }
-[[gnu::naked]]
-void fth_execute(void) { w = (void (***)(void))POP(dsp); GOTO(*w) }
-[[gnu::naked]]
-void fth_find(void)  {
+fptr *fth_execute(void) {
+  w = (fptr **)POP(dsp); return *w;
+}
+fptr *fth_find(void)  {
   dict_entry *result = find(*(struct tag *)(dsp + 1));
   if (NULL == result) {
     PUSH(dsp, 0); NEXT;
@@ -176,7 +153,7 @@ struct {
   fptr push;
 } kernel_words =
   {
-    fth_push,
+    (fptr)fth_push,
   };
 
 #define K(name) ((fptr *)&kernel_words.name),
@@ -201,7 +178,7 @@ struct {
       (FLAG) | (sizeof(#NAME) - 1),					\
       #NAME,								\
       (dict_entry *)link,						\
-      CP								\
+      (fptr)CP								\
     };									\
     memcpy((void *)cp, &entry, sizeof(dict_entry));			\
     link = (dict_entry *)cp;						\
@@ -232,13 +209,12 @@ void dict_dump(void)
 
 fptr **bootstrap = NULL;
 
-/* avoid touching anything in the ctx function! */
 void ctx(void)
 {
-  volatile int x = 0;
-  (void)x;
-  GOTO(*w);
-  x = 0;
+  fptr curr = *(fptr *)w;
+  while (NULL != curr) {
+    curr = (fptr)curr();
+  }
 }
 
 int main()
@@ -273,14 +249,6 @@ int main()
     C(EXECUTE)
     &done_ptr
   };
-  void (*ctxptr)(void) = &ctx;
-  void (**p)(void) = &ctxptr;
-  // TODO adaptive context return offset
-#if 0
-  done_ptr = (fptr)((*(long long*)p) + 34);
-#else
-  done_ptr = (fptr)((*(long long*)p) + 40);
-#endif
   
   ip = (fptr **)&bt;
   w = (fptr **)*ip++;
