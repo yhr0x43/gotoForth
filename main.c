@@ -89,7 +89,7 @@ fptr **w;
 
 cell in;
 #define TIB_SIZE 4096
-cell tib[TIB_SIZE];
+volatile char tib[TIB_SIZE];
 
 #define NEXT w = (fptr **)*ip; ip++; return *w;
 #define MSG(msg) puts((msg));
@@ -99,20 +99,7 @@ fptr *fth_exit(void)  { ip = (fptr **)POP(rsp); NEXT }
 fptr *fth_push(void)  { w = (void *)*ip++; PUSH(dsp, (cell)w); NEXT }
 fptr *fth_fetch(void) { dsp[1] = *(cell *)dsp[1]; NEXT }
 fptr *fth_store(void) { *(cell *)dsp[1] = dsp[2]; dsp += 2; NEXT }
-fptr *fth_create(void) {
-  while (isspace(tib[in])) { in++; }
-  int end = in;
-  while (isgraph(tib[end]) || (0x80 & tib[end])) { end++; }
-  if (end - in > 31) { /* TODO Abort */ }
-  dict_entry *d = (dict_entry *)cp;
-  d->flen = end - in;
-  memcpy(d->name, (const void *)(tib + in), end - in);
-  d->link = link;
-  link = d;
-  cp += sizeof(dict_entry);
-  NEXT;
-}
-/* This dodoes implementation */
+fptr *fth_drop(void) { *(cell *)dsp[1] = dsp[2]; dsp += 2; NEXT }
 fptr *fth_dodoes(void) {
   PUSH(rsp, (cell)ip);
   PUSH(dsp, (cell)w+2);
@@ -124,6 +111,22 @@ fptr *fth_does(void) {
   link->param[0] = (ptr)(w+1);
   cp += sizeof(link->param[0]);
   ip = (fptr **)POP(rsp);
+  NEXT;
+}
+fptr *fth_refill(void) {
+  char *ret = fgets((char *)tib, TIB_SIZE, stdin);
+  if (NULL == ret) { /* TODO abort */ }
+  in = 0;
+  NEXT;
+}
+fptr *fth_word(void) {
+  while (isspace(tib[in])) { in++; }
+  int begin = in;
+  while (isgraph(tib[in]) || (0x80 & tib[in])) { in++; }
+  if (in - begin > 63) { /* TODO decide the max length and abort */ }
+  *(char *)cp = in - begin;
+  memcpy((char *)cp + 1, (const void *)(tib + begin), in - begin);
+  PUSH(dsp, (cell)cp);
   NEXT;
 }
 fptr *fth_rightbracket(void) {
@@ -158,19 +161,22 @@ struct {
 
 #define K(name) ((fptr *)&kernel_words.name),
 #define C(name) (&find(strtotag(#name))->xt),
-#define LIST_OF_WORD						\
-  X(EXIT, 0, fth_exit, )					\
-    X(@, 0, fth_fetch, )					\
-    X(!, 0, fth_store, )					\
-    X(>IN, 0, fth_docon, (void *)&in)				\
-    X(DOES>, 0, fth_does, )					\
-    X(>R, 0, fth_tor, )						\
-    X(R>, 0, fth_rfrom, )					\
-    X(DUP, 0, fth_dup, )					\
-    X(SWAP, 0, fth_swap, )					\
-    X(EXECUTE, 0, fth_execute, )				\
-    X(OVER, 0, fth_docol, C(>R) C(DUP) C(R>) C(SWAP) C(EXIT) )	\
-    X(DUP2, 0, fth_docol, C(OVER) C(OVER) C(EXIT))
+#define LIST_OF_WORD							\
+  X(exit, 0, fth_exit, )						\
+    X(@, 0, fth_fetch, )						\
+    X(!, 0, fth_store, )						\
+    X(>in, 0, fth_docon, (void *)&in)					\
+    X(does>, 0, fth_does, )						\
+    X(>r, 0, fth_tor, )							\
+    X(r>, 0, fth_rfrom, )						\
+    X(dup, 0, fth_dup, )						\
+    X(swap, 0, fth_swap, )						\
+    X(refill, 0, fth_refill, )						\
+    X(execute, 0, fth_execute, )					\
+    X(word, 0, fth_word, )						\
+    X(find, 0, fth_find, )						\
+    X(over, 0, fth_docol, C(>r) C(dup) C(r>) C(swap) C(exit) )		\
+    X(dup2, 0, fth_docol, C(over) C(over) C(exit))
 
 #define X(NAME, FLAG, CP, PARAM)					\
   do {									\
@@ -245,8 +251,13 @@ int main()
   fptr *bt[] = {
     C(EXECUTE)
     K(push)
-    C(DUP2)
-    C(EXECUTE)
+    C(dup2)
+    C(execute)
+    C(refill)
+    C(word)
+    C(find)
+    C(drop)
+    C(execute)
     &done_ptr
   };
   
