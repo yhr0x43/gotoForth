@@ -59,12 +59,24 @@ struct tag {
   char name[31];
 };
 
+int imemcmp(const void *s1, const void *s2, size_t n)
+{
+  const char *c1 = (const char *)s1, *c2 = (const char *)s2;
+  while (n > 0) {
+    if (tolower(*c1) != tolower(*c2)) {
+      return tolower(*c1) - tolower(*c2);
+    }
+    c1++; c2++; n--;
+  }
+  return 0;
+}
+
 dict_entry *find(struct tag tag)
 {
   dict_entry *curr = (dict_entry *)link;
   while (NULL != curr) {
     if (tag.len == (curr->flen & 0x1F) &&
-	0 == memcmp(&tag.name, &curr->name, tag.len)) {
+	0 == imemcmp(&tag.name, &curr->name, tag.len)) {
       return curr;
     }
     curr = curr->link;
@@ -83,6 +95,7 @@ struct tag strtotag(char str[]) {
    a pointer to a function pointer, because dereference a function pointer
    give the "funcion" (i.e. it does nothing), ip is better be a pointer to a 
    pointer to a function pointer */
+/* in general, ip points to the next pointer of xt to be executed */
 fptr **ip;
 /* w is the pointer to the current xt that is actually being executed */
 fptr **w;
@@ -92,14 +105,15 @@ cell in;
 volatile char tib[TIB_SIZE];
 
 #define NEXT w = (fptr **)*ip; ip++; return *w;
-#define MSG(msg) puts((msg));
 fptr *fth_docon(void) { PUSH(dsp, *((*(cell **)w)+1)); NEXT }
 fptr *fth_docol(void) { PUSH(rsp, (cell)ip); ip = w+1; NEXT }
 fptr *fth_exit(void)  { ip = (fptr **)POP(rsp); NEXT }
-fptr *fth_push(void)  { w = (void *)*ip++; PUSH(dsp, (cell)w); NEXT }
+fptr *fth_push(void)  { PUSH(dsp, (cell)*ip++); NEXT }
 fptr *fth_fetch(void) { dsp[1] = *(cell *)dsp[1]; NEXT }
 fptr *fth_store(void) { *(cell *)dsp[1] = dsp[2]; dsp += 2; NEXT }
-fptr *fth_drop(void) { *(cell *)dsp[1] = dsp[2]; dsp += 2; NEXT }
+fptr *fth_tor(void)   { PUSH(rsp, POP(dsp)); NEXT }
+fptr *fth_rfrom(void) { PUSH(dsp, POP(rsp)); NEXT }
+fptr *fth_execute(void) { w = (fptr **)POP(dsp); return *w; }
 fptr *fth_dodoes(void) {
   PUSH(rsp, (cell)ip);
   PUSH(dsp, (cell)w+2);
@@ -113,10 +127,28 @@ fptr *fth_does(void) {
   ip = (fptr **)POP(rsp);
   NEXT;
 }
+fptr *fth_gotoif(void) {
+  if (POP(dsp)) {
+    ip = (fptr **)*ip; NEXT;
+  } else {
+    ip++; NEXT;
+  }
+}
 fptr *fth_refill(void) {
-  char *ret = fgets((char *)tib, TIB_SIZE, stdin);
-  if (NULL == ret) { /* TODO abort */ }
+  if (NULL == fgets((char *)tib, TIB_SIZE, stdin)) {
+    /* TODO abort */
+  }
   in = 0;
+  NEXT;
+}
+fptr *fth_emit(void) { putchar(POP(dsp)); NEXT; }
+fptr *fth_find(void)  {
+  dict_entry *result = find(*(struct tag *)POP(dsp));
+  if (NULL == result) {
+    PUSH(dsp, 0); NEXT;
+  }
+  PUSH(dsp, (cell)&result->xt);
+  PUSH(dsp, result->flen & 0x80 ? 1 : -1);
   NEXT;
 }
 fptr *fth_word(void) {
@@ -129,34 +161,19 @@ fptr *fth_word(void) {
   PUSH(dsp, (cell)cp);
   NEXT;
 }
-fptr *fth_rightbracket(void) {
-  while (1) {
-  }
-}
-fptr *fth_tor(void)   { PUSH(rsp, POP(dsp)); NEXT }
-fptr *fth_rfrom(void) { PUSH(dsp, POP(rsp)); NEXT }
+fptr *fth_drop(void) { POP(dsp); NEXT }
 fptr *fth_dup(void)   { dsp[0] = dsp[1]; dsp--; NEXT }
 fptr *fth_swap(void)  {
   cell tmp = dsp[1]; dsp[1] = dsp[2]; dsp[2] = tmp;
 NEXT; }
-fptr *fth_execute(void) {
-  w = (fptr **)POP(dsp); return *w;
-}
-fptr *fth_find(void)  {
-  dict_entry *result = find(*(struct tag *)(dsp + 1));
-  if (NULL == result) {
-    PUSH(dsp, 0); NEXT;
-  }
-  dsp[1] = (cell)&result->xt;
-  PUSH(dsp, result->flen & 0x80 ? 1 : -1);
-  NEXT;
-}
 
 struct {
   fptr push;
+  fptr gotoif;
 } kernel_words =
   {
     (fptr)fth_push,
+    (fptr)fth_gotoif,
   };
 
 #define K(name) ((fptr *)&kernel_words.name),
@@ -170,6 +187,7 @@ struct {
     X(>r, 0, fth_tor, )							\
     X(r>, 0, fth_rfrom, )						\
     X(dup, 0, fth_dup, )						\
+    X(drop, 0, fth_drop, )						\
     X(swap, 0, fth_swap, )						\
     X(refill, 0, fth_refill, )						\
     X(execute, 0, fth_execute, )					\
@@ -200,7 +218,6 @@ void build_core_code(void) {
   LIST_OF_WORD;
 #undef X
 #undef LIST_OF_CODE
-  
 }
 
 void dict_dump(void)
@@ -226,7 +243,7 @@ void ctx(void)
 int main()
 {
   build_core_code();
-  dict_dump();
+  // dict_dump();
 
   PUSH(dsp, 6);
   PUSH(dsp, 2);
@@ -234,22 +251,22 @@ int main()
   stacks_print();
 
   dict_entry *dup2;
-  if (NULL == (dup2 = find(strtotag("DUP2")))) {
-    puts("DUP2 not found\n");
+  if (NULL == (dup2 = find(strtotag("dup2")))) {
+    puts("dup2 not found\n");
     return 1;
   }
 
   PUSH(dsp, (long long)&dup2->xt);
 
   dict_entry *execute;
-  if (NULL == (execute = find(strtotag("EXECUTE")))) {
-    puts("EXECUTE not found\n");
+  if (NULL == (execute = find(strtotag("execute")))) {
+    puts("execute not found\n");
     return 1;
   }
 
   fptr done_ptr = NULL;
   fptr *bt[] = {
-    C(EXECUTE)
+    C(execute)
     K(push)
     C(dup2)
     C(execute)
@@ -258,6 +275,10 @@ int main()
     C(find)
     C(drop)
     C(execute)
+    K(push)
+    (fptr *)1,
+    K(gotoif)
+    (fptr *)bt+4,
     &done_ptr
   };
   
