@@ -41,7 +41,7 @@ void stacks_print(void) {
 
 /* dict definition */
 typedef struct dict_entry {
-  char flen;
+  unsigned char flen;
   char name[31];
   struct dict_entry *link;
   fptr xt;
@@ -178,23 +178,29 @@ struct {
 
 #define K(name) ((fptr *)&kernel_words.name),
 #define C(name) (&find(strtotag(#name))->xt),
+#define N ,
 #define LIST_OF_WORD							\
   X(exit, 0, fth_exit, )						\
-    X(@, 0, fth_fetch, )						\
-    X(!, 0, fth_store, )						\
-    X(>in, 0, fth_docon, (void *)&in)					\
-    X(does>, 0, fth_does, )						\
-    X(>r, 0, fth_tor, )							\
-    X(r>, 0, fth_rfrom, )						\
-    X(dup, 0, fth_dup, )						\
-    X(drop, 0, fth_drop, )						\
-    X(swap, 0, fth_swap, )						\
-    X(refill, 0, fth_refill, )						\
-    X(execute, 0, fth_execute, )					\
-    X(word, 0, fth_word, )						\
-    X(find, 0, fth_find, )						\
-    X(over, 0, fth_docol, C(>r) C(dup) C(r>) C(swap) C(exit) )		\
-    X(dup2, 0, fth_docol, C(over) C(over) C(exit))
+  X(@, 0, fth_fetch, )							\
+  X(!, 0, fth_store, )							\
+  X(>in, 0, fth_docon, (void *)&in)					\
+  X(does>, 0, fth_does, )						\
+  X(>r, 0, fth_tor, )							\
+  X(r>, 0, fth_rfrom, )							\
+  X(dup, 0, fth_dup, )							\
+  X(drop, 0, fth_drop, )						\
+  X(swap, 0, fth_swap, )						\
+  X(refill, 0, fth_refill, )						\
+  X(execute, 0, fth_execute, )						\
+  X(word, 0, fth_word, )						\
+  X(find, 0, fth_find, )						\
+  X([, 0x80, fth_docol,							\
+     C(refill) C(word) C(find)						\
+     K(gotoif) (void **)cp+5 N						\
+     C(execute)								\
+     K(push) (void *)1 N K(gotoif) (void *)cp)				\
+  X(over, 0, fth_docol, C(>r) C(dup) C(r>) C(swap) C(exit) )		\
+  X(dup2, 0, fth_docol, C(over) C(over) C(exit))
 
 #define X(NAME, FLAG, CP, PARAM)					\
   do {									\
@@ -270,15 +276,7 @@ int main()
     K(push)
     C(dup2)
     C(execute)
-    C(refill)
-    C(word)
-    C(find)
-    C(drop)
-    C(execute)
-    K(push)
-    (fptr *)1,
-    K(gotoif)
-    (fptr *)bt+4,
+    C([)
     &done_ptr
   };
   
