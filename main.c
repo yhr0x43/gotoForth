@@ -223,15 +223,17 @@ void build_core_code(void) {
   dict_entry entry;
   LIST_OF_WORD;
 #undef X
-#undef LIST_OF_CODE
+#undef LIST_OF_WORD
 }
 
 void dict_dump(void)
 {
-  char *begin = (char *)dict;
   FILE *fp = fopen("dump", "w+");
-  while (begin < (char *)cp) {
-    putc(*begin++, fp);
+  size_t dict_size = (char *)cp - (char *)dict;
+  if (dict_size != fwrite((void *)dict, 1, dict_size, fp)) {
+    perror("dump");
+    fclose(fp);
+    return;
   }
   fclose(fp);
 }
