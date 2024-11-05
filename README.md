@@ -18,3 +18,4 @@ $ ./forth
 - Moving Forth https://www.bradrodriguez.com/papers/index.html
 - Forth Standard https://forth-standard.org/standard/alpha
 - Starting FORTH https://www.forth.com/starting-forth/
+- Thinking Forth https://thinking-forth.sourceforge.net/
